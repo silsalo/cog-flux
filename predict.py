@@ -1,6 +1,6 @@
-from contextlib import contextmanager
 import os
 import time
+from contextlib import contextmanager
 from typing import Any, Tuple
 
 import torch
@@ -12,9 +12,17 @@ torch.backends.cudnn.allow_tf32 = True
 torch.backends.cudnn.benchmark = True
 torch.backends.cudnn.benchmark_limit = 20
 import logging
-
-
 from dataclasses import dataclass
+from typing import List
+
+import numpy as np
+from cog import BasePredictor, Input, Path  # type: ignore
+
+# from diffusers.pipelines.stable_diffusion.safety_checker import (
+#     StableDiffusionSafetyChecker,
+# )
+from einops import rearrange
+from flux.modules.image_embedders import CannyImageEncoder, ImageEncoder
 from flux.sampling import (
     denoise,
     get_noise,
@@ -23,38 +31,26 @@ from flux.sampling import (
     prepare_redux,
     unpack,
 )
-from fp8.flux_pipeline import FluxPipeline
-from fp8.util import LoadedModels
-from fp8.lora_loading import load_lora, load_loras, unload_loras
-
-import numpy as np
-from einops import rearrange
-from PIL import Image
-from typing import List
-from torchvision import transforms
-from cog import BasePredictor, Input, Path  # type: ignore
 from flux.util import (
+    download_weights,
     load_ae,
     load_clip,
     load_depth_encoder,
     load_flow_model,
     load_redux,
     load_t5,
-    download_weights,
 )
-from flux.modules.image_embedders import (
-    ImageEncoder,
-    CannyImageEncoder,
-)
+from fp8.flux_pipeline import FluxPipeline
+from fp8.lora_loading import load_lora, load_loras, unload_loras
+from fp8.util import LoadedModels
+from PIL import Image
+from torchvision import transforms
 
-from diffusers.pipelines.stable_diffusion.safety_checker import (
-    StableDiffusionSafetyChecker,
-)
-from transformers import (
-    CLIPImageProcessor,
-    AutoModelForImageClassification,
-    ViTImageProcessor,
-)
+# from transformers import (
+#     AutoModelForImageClassification,
+#     CLIPImageProcessor,
+#     ViTImageProcessor,
+# )
 from weights import WeightsDownloadCache
 
 SAFETY_CACHE = Path("./safety-cache")
@@ -207,22 +203,24 @@ class Predictor(BasePredictor):
         )
         print("Detected GPU:", gpu_name)
 
-        if not SAFETY_CACHE.exists():
-            download_weights(SAFETY_URL, SAFETY_CACHE)
-        print("Loading Safety Checker to GPU")
-        self.safety_checker = StableDiffusionSafetyChecker.from_pretrained(
-            SAFETY_CACHE, torch_dtype=torch.float16
-        ).to("cuda")  # type: ignore
-        self.feature_extractor = CLIPImageProcessor.from_pretrained(FEATURE_EXTRACTOR)
+        # if not SAFETY_CACHE.exists():
+        #     download_weights(SAFETY_URL, SAFETY_CACHE)
+        # print("Loading Safety Checker to GPU")
+        # self.safety_checker = StableDiffusionSafetyChecker.from_pretrained(
+        #     SAFETY_CACHE, torch_dtype=torch.float16
+        # ).to(
+        #     "cuda"
+        # )  # type: ignore
+        # self.feature_extractor = CLIPImageProcessor.from_pretrained(FEATURE_EXTRACTOR)
 
-        print("Loading Falcon safety checker...")
-        if not FALCON_MODEL_CACHE.exists():
-            download_weights(FALCON_MODEL_URL, FALCON_MODEL_CACHE)
-        self.falcon_model = AutoModelForImageClassification.from_pretrained(
-            FALCON_MODEL_NAME,
-            cache_dir=FALCON_MODEL_CACHE,
-        )
-        self.falcon_processor = ViTImageProcessor.from_pretrained(FALCON_MODEL_NAME)
+        # print("Loading Falcon safety checker...")
+        # if not FALCON_MODEL_CACHE.exists():
+        #     download_weights(FALCON_MODEL_URL, FALCON_MODEL_CACHE)
+        # self.falcon_model = AutoModelForImageClassification.from_pretrained(
+        #     FALCON_MODEL_NAME,
+        #     cache_dir=FALCON_MODEL_CACHE,
+        # )
+        # self.falcon_processor = ViTImageProcessor.from_pretrained(FALCON_MODEL_NAME)
 
         # need > 48 GB of ram to store all models in VRAM
         total_mem = torch.cuda.get_device_properties(0).total_memory
@@ -284,7 +282,10 @@ class Predictor(BasePredictor):
                     "offload_flow": True,
                 }
             self.fp8_pipe = FluxPipeline.load_pipeline_from_config_path(
-                f"fp8/configs/config-1-{flow_model_name}-h100.json",
+                os.path.join(
+                    os.path.dirname(__file__),
+                    f"fp8/configs/config-1-{flow_model_name}-h100.json",
+                ),
                 shared_models=shared_models,
                 **extra_args,  # type: ignore
             )
